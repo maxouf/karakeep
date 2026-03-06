@@ -231,6 +231,10 @@
                     "type": "string",
                     "nullable": true
                   },
+                  "transcriptAssetId": {
+                    "type": "string",
+                    "nullable": true
+                  },
                   "favicon": {
                     "type": "string",
                     "nullable": true
@@ -376,6 +380,7 @@
                     "bannerImage",
                     "fullPageArchive",
                     "video",
+                    "transcript",
                     "bookmarkAsset",
                     "precrawledArchive",
                     "userUploaded",
@@ -1942,6 +1947,7 @@
                       "bannerImage",
                       "fullPageArchive",
                       "video",
+                      "transcript",
                       "bookmarkAsset",
                       "precrawledArchive",
                       "userUploaded",
@@ -1980,6 +1986,7 @@
                         "bannerImage",
                         "fullPageArchive",
                         "video",
+                        "transcript",
                         "bookmarkAsset",
                         "precrawledArchive",
                         "userUploaded",

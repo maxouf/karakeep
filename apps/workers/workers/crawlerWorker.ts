@@ -50,6 +50,7 @@ import {
   OpenAIQueue,
   QuotaService,
   setSpanAttributes,
+  TranscriptWorkerQueue,
   triggerSearchReindex,
   triggerWebhook,
   VideoWorkerQueue,
@@ -2152,6 +2153,19 @@ async function runCrawler(
     if (serverConfig.crawler.downloadVideo) {
       // Trigger a potential download of a video from the URL
       await VideoWorkerQueue.enqueue(
+        {
+          bookmarkId,
+          url,
+        },
+        enqueueOpts,
+      );
+    }
+
+    // Trigger transcript extraction for YouTube URLs
+    if (
+      /(?:youtube\.com\/watch|youtu\.be\/|youtube\.com\/shorts\/)/.test(url)
+    ) {
+      await TranscriptWorkerQueue.enqueue(
         {
           bookmarkId,
           url,

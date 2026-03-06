@@ -169,6 +169,9 @@ export class Bookmark extends BareBookmark {
         )?.id,
         videoAssetId: assets.find((a) => a.assetType == AssetTypes.LINK_VIDEO)
           ?.id,
+        transcriptAssetId: assets.find(
+          (a) => a.assetType == AssetTypes.LINK_TRANSCRIPT,
+        )?.id,
         url: link.url,
         title: link.title,
         description: link.description,
@@ -659,6 +662,9 @@ export class Bookmark extends BareBookmark {
             }
             if (row.assets.assetType == AssetTypes.LINK_VIDEO) {
               content.videoAssetId = row.assets.id;
+            }
+            if (row.assets.assetType == AssetTypes.LINK_TRANSCRIPT) {
+              content.transcriptAssetId = row.assets.id;
             }
             if (row.assets.assetType == AssetTypes.LINK_PRECRAWLED_ARCHIVE) {
               content.precrawledArchiveAssetId = row.assets.id;

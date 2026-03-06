@@ -15,6 +15,19 @@ import {
 import { BookmarkLayoutAdaptingCard } from "./BookmarkLayoutAdaptingCard";
 import FooterLinkURL from "./FooterLinkURL";
 
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    /youtube\.com\/v\/([^&\n?#]+)/,
+    /youtube\.com\/shorts\/([^&\n?#]+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 const useOnClickUrl = (bookmark: ZBookmarkTypeLink) => {
   const userSettings = useUserSettings();
   return {
@@ -39,6 +52,20 @@ function LinkTitle({ bookmark }: { bookmark: ZBookmarkTypeLink }) {
   );
 }
 
+function YouTubeEmbed({ videoId }: { videoId: string }) {
+  return (
+    <div className="relative size-full">
+      <iframe
+        src={`https://www.youtube.com/embed/${videoId}`}
+        title="YouTube video player"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+        allowFullScreen
+        className="absolute inset-0 h-full w-full border-0"
+      />
+    </div>
+  );
+}
+
 function LinkImage({
   bookmark,
   className,
@@ -48,6 +75,16 @@ function LinkImage({
 }) {
   const { onClickUrl, urlTarget } = useOnClickUrl(bookmark);
   const link = bookmark.content;
+
+  // YouTube: embed player directly in card
+  const videoId = extractYouTubeVideoId(link.url);
+  if (videoId) {
+    return (
+      <div className={className}>
+        <YouTubeEmbed videoId={videoId} />
+      </div>
+    );
+  }
 
   const imgComponent = (url: string, unoptimized: boolean) => (
     <Image
@@ -67,8 +104,6 @@ function LinkImage({
   } else if (imageDetails) {
     img = imgComponent(imageDetails.url, !imageDetails.localAsset);
   } else {
-    // No image found
-    // A dummy white pixel for when there's no image.
     img = imgComponent(
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdj+P///38ACfsD/QVDRcoAAAAASUVORK5CYII=",
       true,

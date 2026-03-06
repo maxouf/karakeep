@@ -210,6 +210,23 @@ export const VideoWorkerQueue = createDeferredQueue<ZVideoRequest>(
   },
 );
 
+// Transcript Worker
+export const zTranscriptRequestSchema = z.object({
+  bookmarkId: z.string(),
+  url: z.string(),
+});
+export type ZTranscriptRequest = z.infer<typeof zTranscriptRequestSchema>;
+
+export const TranscriptWorkerQueue = createDeferredQueue<ZTranscriptRequest>(
+  "transcript_queue",
+  {
+    defaultJobArgs: {
+      numRetries: 3,
+    },
+    keepFailedJobs: false,
+  },
+);
+
 // Feed Worker
 export const zFeedRequestSchema = z.object({
   feedId: z.string(),

@@ -127,7 +127,7 @@ const allEnv = z.object({
   ASSETS_DIR: z.string().optional(),
   MAX_ASSET_SIZE_MB: z.coerce.number().default(50),
   HTML_CONTENT_SIZE_INLINE_THRESHOLD_BYTES: z.coerce.number().default(5 * 1024),
-  INFERENCE_LANG: z.string().default("english"),
+  INFERENCE_LANG: z.string().default("french"),
   WEBHOOK_TIMEOUT_SEC: z.coerce.number().default(5),
   WEBHOOK_RETRY_TIMES: z.coerce.number().int().min(0).default(3),
   MAX_RSS_FEEDS_PER_USER: z.coerce.number().default(1000),
