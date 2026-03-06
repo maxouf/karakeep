@@ -1,7 +1,3 @@
-import fs from "fs";
-import * as os from "os";
-import path from "path";
-import { execa } from "execa";
 import { workerStatsCounter } from "metrics";
 import { getProxyAgent, validateUrl } from "network";
 import { withWorkerTracing } from "workerTracing";
@@ -21,8 +17,6 @@ import logger from "@karakeep/shared/logger";
 import { DequeuedJob, getQueueClient } from "@karakeep/shared/queueing";
 
 import { getBookmarkDetails, updateAsset } from "../workerUtils";
-
-const TMP_FOLDER = path.join(os.tmpdir(), "transcript_downloads");
 
 export class TranscriptWorker {
   static async build() {
@@ -60,70 +54,146 @@ export class TranscriptWorker {
   }
 }
 
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+    /youtube\.com\/v\/([^&\n?#]+)/,
+    /youtube\.com\/shorts\/([^&\n?#]+)/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+interface YTCaptionTrack {
+  baseUrl: string;
+  languageCode: string;
+  kind?: string;
+  name?: { simpleText?: string };
+}
+
 /**
- * Extracts YouTube subtitles using yt-dlp and returns them as a VTT string.
- * Tries: 1) manual subs in target lang, 2) auto subs in target lang, 3) any available subs.
+ * Fetches YouTube captions by scraping the video page for captionTracks,
+ * then downloading the VTT subtitle file directly.
+ * No yt-dlp needed — pure HTTP fetch.
  */
-async function extractSubtitles(
-  url: string,
-  tmpDir: string,
-  proxy: string | undefined,
-  abortSignal: AbortSignal,
+async function fetchYouTubeTranscript(
+  videoId: string,
+  proxyUrl: string | undefined,
 ): Promise<string | null> {
-  const baseName = "transcript";
   const lang =
     serverConfig.inference.inferredTagLang === "french" ? "fr" : "en";
 
-  // Try to get subtitles (manual + auto) in the preferred language
-  const args = [
-    url,
-    "--write-subs",
-    "--write-auto-subs",
-    "--sub-lang",
-    `${lang}.*,${lang}`,
-    "--sub-format",
-    "vtt",
-    "--skip-download",
-    "--no-playlist",
-    "-o",
-    path.join(tmpDir, baseName),
-  ];
-  if (proxy) {
-    args.push("--proxy", proxy);
-  }
-
-  try {
-    await execa("yt-dlp", args, { cancelSignal: abortSignal });
-  } catch (e) {
-    const err = e as Error;
-    if (
-      err.message.includes("ERROR: Unsupported URL:") ||
-      err.message.includes("No media found")
-    ) {
-      return null;
-    }
-    logger.warn(
-      `[TranscriptWorker] yt-dlp subtitle extraction warning: ${err.message}`,
+  // Fetch the YouTube video page to extract caption tracks
+  const pageUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const fetchOptions: RequestInit = {};
+  if (proxyUrl) {
+    // Node fetch doesn't natively support proxies, but we try without
+    logger.info(
+      `[TranscriptWorker] Proxy configured but using direct fetch for YouTube page`,
     );
   }
 
-  // Find the downloaded VTT file
-  const vttFile = await findVttFile(tmpDir);
-  if (!vttFile) {
+  const pageResponse = await fetch(pageUrl, {
+    ...fetchOptions,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    },
+  });
+
+  if (!pageResponse.ok) {
+    logger.warn(
+      `[TranscriptWorker] Failed to fetch YouTube page: ${pageResponse.status}`,
+    );
     return null;
   }
 
-  return fs.promises.readFile(vttFile, "utf-8");
-}
+  const pageHtml = await pageResponse.text();
 
-async function findVttFile(dir: string): Promise<string | null> {
+  // Extract captionTracks from the page's player response JSON
+  const captionTracksMatch = pageHtml.match(
+    /"captionTracks"\s*:\s*(\[.*?\])\s*,\s*"/,
+  );
+  if (!captionTracksMatch) {
+    logger.info(
+      `[TranscriptWorker] No caption tracks found in YouTube page for ${videoId}`,
+    );
+    return null;
+  }
+
+  let captionTracks: YTCaptionTrack[];
   try {
-    const files = await fs.promises.readdir(dir);
-    const vtt = files.find((f) => f.endsWith(".vtt"));
-    return vtt ? path.join(dir, vtt) : null;
+    captionTracks = JSON.parse(captionTracksMatch[1]) as YTCaptionTrack[];
   } catch {
+    logger.warn(
+      `[TranscriptWorker] Failed to parse caption tracks JSON for ${videoId}`,
+    );
     return null;
   }
+
+  if (captionTracks.length === 0) {
+    return null;
+  }
+
+  // Pick the best track: prefer manual subs in target lang, then auto subs in target lang, then any
+  let track: YTCaptionTrack | undefined;
+
+  // 1. Manual subs in preferred language
+  track = captionTracks.find(
+    (t) => t.languageCode === lang && t.kind !== "asr",
+  );
+
+  // 2. Auto-generated subs in preferred language
+  if (!track) {
+    track = captionTracks.find(
+      (t) => t.languageCode === lang && t.kind === "asr",
+    );
+  }
+
+  // 3. Manual subs in English as fallback
+  if (!track) {
+    track = captionTracks.find(
+      (t) => t.languageCode === "en" && t.kind !== "asr",
+    );
+  }
+
+  // 4. Auto subs in English
+  if (!track) {
+    track = captionTracks.find(
+      (t) => t.languageCode === "en" && t.kind === "asr",
+    );
+  }
+
+  // 5. Any available track
+  if (!track) {
+    track = captionTracks[0];
+  }
+
+  if (!track) {
+    return null;
+  }
+
+  // Fetch the subtitle content as VTT
+  const subtitleUrl = `${track.baseUrl}&fmt=vtt`;
+  const subResponse = await fetch(subtitleUrl, {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    },
+  });
+
+  if (!subResponse.ok) {
+    logger.warn(
+      `[TranscriptWorker] Failed to fetch subtitles: ${subResponse.status}`,
+    );
+    return null;
+  }
+
+  return subResponse.text();
 }
 
 /**
@@ -204,24 +274,27 @@ async function runWorker(job: DequeuedJob<ZTranscriptRequest>) {
   }
   const normalizedUrl = validation.url.toString();
 
-  const tmpDir = path.join(TMP_FOLDER, jobId);
-  await fs.promises.mkdir(tmpDir, { recursive: true });
+  const videoId = extractVideoId(normalizedUrl);
+  if (!videoId) {
+    logger.info(
+      `[TranscriptWorker][${jobId}] Could not extract video ID from "${normalizedUrl}"`,
+    );
+    return;
+  }
 
   try {
     logger.info(
-      `[TranscriptWorker][${jobId}] Extracting transcript from "${normalizedUrl}"`,
+      `[TranscriptWorker][${jobId}] Extracting transcript for video ${videoId}`,
     );
 
-    const vttContent = await extractSubtitles(
-      normalizedUrl,
-      tmpDir,
+    const vttContent = await fetchYouTubeTranscript(
+      videoId,
       proxy?.proxy.toString(),
-      job.abortSignal,
     );
 
     if (!vttContent) {
       logger.info(
-        `[TranscriptWorker][${jobId}] No subtitles found for "${normalizedUrl}"`,
+        `[TranscriptWorker][${jobId}] No subtitles found for video ${videoId}`,
       );
       return;
     }
@@ -230,7 +303,7 @@ async function runWorker(job: DequeuedJob<ZTranscriptRequest>) {
     const cues = vttToJson(vttContent);
     if (cues.length === 0) {
       logger.info(
-        `[TranscriptWorker][${jobId}] Subtitles were empty after parsing for "${normalizedUrl}"`,
+        `[TranscriptWorker][${jobId}] Subtitles were empty after parsing for video ${videoId}`,
       );
       return;
     }
@@ -269,7 +342,7 @@ async function runWorker(job: DequeuedJob<ZTranscriptRequest>) {
     });
 
     logger.info(
-      `[TranscriptWorker][${jobId}] Saved transcript (${cues.length} cues) for "${normalizedUrl}"`,
+      `[TranscriptWorker][${jobId}] Saved transcript (${cues.length} cues) for video ${videoId}`,
     );
   } catch (error) {
     if (error instanceof StorageQuotaError) {
@@ -279,10 +352,5 @@ async function runWorker(job: DequeuedJob<ZTranscriptRequest>) {
       return;
     }
     throw error;
-  } finally {
-    // Clean up temp directory
-    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {
-      /* ignore cleanup errors */
-    });
   }
 }
